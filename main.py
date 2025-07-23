@@ -6,8 +6,7 @@ from telegram.ext import (
     ContextTypes, filters, ConversationHandler
 )
 
-# Replace with your actual bot token
-BOT_TOKEN = "8118607834:AAHucoXtSK6qbkenGxmjR8igzFJc-4fV7nI"
+BOT_TOKEN = os.environ["BOT_TOKEN"]  # Load from Render environment
 
 # States for conversation
 ASK_START, ASK_END, ASK_DURATION, ASK_NAME = range(4)
@@ -26,32 +25,32 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Downloading your video...")
     file = await video.get_file()
     await file.download_to_drive(video_path)
-    await update.message.reply_text("✅ Download complete.\n\nNow send the **START time** (format: `HH:MM:SS`):")
+    await update.message.reply_text("✅ Download complete.\nNow send the **START time** (e.g., `00:00:00`):")
     return ASK_START
 
 async def ask_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['start_time'] = update.message.text.strip()
-    await update.message.reply_text("Send the **END time** (format: `HH:MM:SS`):")
+    await update.message.reply_text("Send the **END time** (e.g., `01:00:00`):")
     return ASK_END
 
 async def ask_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['end_time'] = update.message.text.strip()
-    await update.message.reply_text("Send the clip duration **in minutes** (e.g., 1 for 1 minute):")
+    await update.message.reply_text("Enter duration per clip in **minutes** (e.g., `1`):")
     return ASK_DURATION
 
 async def ask_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         minutes = float(update.message.text.strip())
-        context.user_data['duration'] = int(minutes * 60)  # convert to seconds
+        context.user_data['duration'] = int(minutes * 60)
     except ValueError:
-        await update.message.reply_text("❌ Please enter a number (e.g., 1, 2.5).")
+        await update.message.reply_text("❌ Invalid number. Enter minutes like `1`, `2.5`, etc.")
         return ASK_DURATION
-    await update.message.reply_text("Send the **base name** for clips (e.g., `Squid Game`):")
+    await update.message.reply_text("Now enter the **base name** for clips (e.g., `Squid Game`):")
     return ASK_NAME
 
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['base_name'] = update.message.text.strip()
-    await update.message.reply_text("🎬 Processing... This may take a few minutes.")
+    await update.message.reply_text("🎬 Processing... Please wait.")
 
     start = context.user_data['start_time']
     end = context.user_data['end_time']
@@ -62,24 +61,20 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trimmed = "trimmed.mp4"
 
     try:
-        # Step 1: Trim video
+        # Trim main video
         subprocess.run([
             "ffmpeg", "-ss", start, "-to", end,
             "-i", video_path, "-c", "copy", trimmed, "-y"
         ], check=True)
 
-        # Step 2: Enhance + Watermark + Split
+        # Split trimmed video
         subprocess.run([
-            "ffmpeg", "-i", trimmed, "-i", "logo.png",
-            "-filter_complex",
-            "[0:v]scale=1080:1920,eq=contrast=1.4:saturation=1.5:brightness=0.05,unsharp=5:5:0.8[vid];"
-            "[vid][1:v]overlay=W-w-10:H-h-10",
-            "-c:a", "copy", "-f", "segment",
-            "-segment_time", str(duration),
-            "clips/output%03d.mp4", "-y"
+            "ffmpeg", "-i", trimmed,
+            "-f", "segment", "-segment_time", str(duration),
+            "-c", "copy", "clips/output%03d.mp4", "-y"
         ], check=True)
 
-        # Step 3: Rename + send back to user
+        # Rename and send
         files = sorted(os.listdir("clips"))
         for i, file in enumerate(files, 1):
             new_name = f"{base_name} {i}.mp4"
@@ -89,11 +84,10 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Done! All clips sent.")
 
     except subprocess.CalledProcessError as e:
-        await update.message.reply_text("❌ Error occurred while processing video.")
-        print("FFmpeg error:", e)
+        await update.message.reply_text("❌ FFmpeg error during processing.")
+        print(e)
 
     finally:
-        # Cleanup
         try:
             os.remove(video_path)
             os.remove(trimmed)
